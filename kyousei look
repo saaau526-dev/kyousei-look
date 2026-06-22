@@ -3,22 +3,22 @@ local runService = game:GetService("RunService")
 local plr = players.LocalPlayer
 local camera = workspace.CurrentCamera
 
--- グローバル変数でON/OFFを管理
-_G.LockRotation = false
+-- モード管理 ("OFF", "CAMERA", "TARGET")
+local currentMode = "OFF"
 
 local ScreenGui = Instance.new("ScreenGui", game.CoreGui)
-ScreenGui.Name = "Rotation_Lock_Gui"
+ScreenGui.Name = "Rotation_Lock_Advanced_Gui"
 ScreenGui.ResetOnSpawn = false
 
 -- トグルボタンの作成
 local ToggleBtn = Instance.new("TextButton", ScreenGui)
-ToggleBtn.Size = UDim2.new(0, 150, 0, 35)
-ToggleBtn.Position = UDim2.new(1, -170, 0, 20) -- 画面右上に配置
+ToggleBtn.Size = UDim2.new(0, 160, 0, 35)
+ToggleBtn.Position = UDim2.new(1, -180, 0, 65) -- ESPメニューと被らないよう少し下に配置
 ToggleBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 22)
-ToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-ToggleBtn.Text = "ROTATION : OFF"
+ToggleBtn.TextColor3 = Color3.fromRGB(130, 130, 135)
+ToggleBtn.Text = "AIM MODE : OFF"
 ToggleBtn.Font = Enum.Font.RobotoMono
-ToggleBtn.TextSize = 12
+ToggleBtn.TextSize = 11
 ToggleBtn.BorderSizePixel = 0
 
 local btnCorner = Instance.new("UICorner", ToggleBtn)
@@ -29,46 +29,94 @@ btnStroke.Color = Color3.fromRGB(70, 70, 75)
 btnStroke.Thickness = 1
 btnStroke.Transparency = 0.4
 
--- ボタンの見た目を更新する関数
+-- 見た目の更新
 local function updateButtonDisplay()
-    if _G.LockRotation then
-        ToggleBtn.BackgroundColor3 = Color3.fromRGB(245, 245, 245)
-        ToggleBtn.TextColor3 = Color3.fromRGB(15, 15, 15)
-        ToggleBtn.Text = "ROTATION : LOCK"
-        btnStroke.Color = Color3.fromRGB(255, 255, 255)
-    else
+    if currentMode == "OFF" then
         ToggleBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 22)
         ToggleBtn.TextColor3 = Color3.fromRGB(130, 130, 135)
-        ToggleBtn.Text = "ROTATION : OFF"
+        ToggleBtn.Text = "AIM MODE : OFF"
         btnStroke.Color = Color3.fromRGB(70, 70, 75)
+    elseif currentMode == "CAMERA" then
+        ToggleBtn.BackgroundColor3 = Color3.fromRGB(245, 245, 245)
+        ToggleBtn.TextColor3 = Color3.fromRGB(15, 15, 15)
+        ToggleBtn.Text = "AIM : CAMERA"
+        btnStroke.Color = Color3.fromRGB(255, 255, 255)
+    elseif currentMode == "TARGET" then
+        ToggleBtn.BackgroundColor3 = Color3.fromRGB(255, 100, 100)
+        ToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        ToggleBtn.Text = "AIM : TARGET (NEAREST)"
+        btnStroke.Color = Color3.fromRGB(255, 150, 150)
     end
 end
 
--- クリックイベント
+-- 3モード切り替えイベント
 ToggleBtn.MouseButton1Click:Connect(function()
-    _G.LockRotation = not _G.LockRotation
+    if currentMode == "OFF" then
+        currentMode = "CAMERA"
+    elseif currentMode == "CAMERA" then
+        currentMode = "TARGET"
+    else
+        currentMode = "OFF"
+    end
     updateButtonDisplay()
 end)
 
--- 毎フレームキャラクターの向きをカメラに強制同期
-runService.RenderStepped:Connect(function()
-    if _G.LockRotation then
-        pcall(function()
-            local char = plr.Character
-            if char then
-                local hrp = char:FindFirstChild("HumanoidRootPart")
-                local hum = char:FindFirstChild("Humanoid")
-                
-                -- キャラクターが生きていて、HumanoidRootPartが存在する場合
-                if hrp and hum and hum.Health > 0 then
-                    -- カメラの水平方向（Y軸の回転のみ）を取得
-                    local camLook = camera.CFrame.LookVector
-                    local targetAngle = math.atan2(-camLook.X, -camLook.Z)
-                    
-                    -- キャラクターのCFrameをカメラの向きに合わせて強制上書き
-                    hrp.CFrame = CFrame.new(hrp.Position) * CFrame.Angles(0, targetAngle, 0)
+-- 一番近くのプレイヤーを取得する関数
+local function getClosestPlayer()
+    local closestPlayer = nil
+    local shortestDistance = math.huge -- 無限大で初期化
+    
+    local myChar = plr.Character
+    if not myChar or not myChar:FindFirstChild("HumanoidRootPart") then return nil end
+    local myHrp = myChar.HumanoidRootPart
+
+    for _, v in pairs(players:GetPlayers()) do
+        if v ~= plr and v.Character and v.Character:FindFirstChild("HumanoidRootPart") and v.Character:FindFirstChild("Humanoid") then
+            if v.Character.Humanoid.Health > 0 then
+                -- 自分と相手の距離を計算
+                local distance = (myHrp.Position - v.Character.HumanoidRootPart.Position).Magnitude
+                if distance < shortestDistance then
+                    shortestDistance = distance
+                    closestPlayer = v
                 end
             end
-        end)
+        end
     end
+    return closestPlayer
+end
+
+-- メインループ（毎フレーム実行）
+runService.RenderStepped:Connect(function()
+    if currentMode == "OFF" then return end
+    
+    pcall(function()
+        local char = plr.Character
+        if not char then return end
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        local hum = char:FindFirstChild("Humanoid")
+        
+        if hrp and hum and hum.Health > 0 then
+            
+            -- 【CAMERAモード】視点（カメラ）の方向に強制的に向く
+            if currentMode == "CAMERA" then
+                local camLook = camera.CFrame.LookVector
+                local targetAngle = math.atan2(-camLook.X, -camLook.Z)
+                hrp.CFrame = CFrame.new(hrp.Position) * CFrame.Angles(0, targetAngle, 0)
+            
+            -- 【TARGETモード】一番近くのプレイヤーの方向に強制的に向く
+            elseif currentMode == "TARGET" then
+                local targetPlr = getClosestPlayer()
+                if targetPlr and targetPlr.Character and targetPlr.Character:FindFirstChild("HumanoidRootPart") then
+                    local targetHrp = targetPlr.Character.HumanoidRootPart
+                    
+                    -- 高低差（Y軸）を無視して水平方向だけの向きを計算
+                    local lookPos = Vector3.new(targetHrp.Position.X, hrp.Position.Y, targetHrp.Position.Z)
+                    
+                    -- キャラクターの向きをターゲットへ固定
+                    hrp.CFrame = CFrame.lookAt(hrp.Position, lookPos)
+                end
+            end
+            
+        end
+    end)
 end)
