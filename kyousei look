@@ -1,0 +1,74 @@
+local players = game:GetService("Players")
+local runService = game:GetService("RunService")
+local plr = players.LocalPlayer
+local camera = workspace.CurrentCamera
+
+-- グローバル変数でON/OFFを管理
+_G.LockRotation = false
+
+local ScreenGui = Instance.new("ScreenGui", game.CoreGui)
+ScreenGui.Name = "Rotation_Lock_Gui"
+ScreenGui.ResetOnSpawn = false
+
+-- トグルボタンの作成
+local ToggleBtn = Instance.new("TextButton", ScreenGui)
+ToggleBtn.Size = UDim2.new(0, 150, 0, 35)
+ToggleBtn.Position = UDim2.new(1, -170, 0, 20) -- 画面右上に配置
+ToggleBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 22)
+ToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ToggleBtn.Text = "ROTATION : OFF"
+ToggleBtn.Font = Enum.Font.RobotoMono
+ToggleBtn.TextSize = 12
+ToggleBtn.BorderSizePixel = 0
+
+local btnCorner = Instance.new("UICorner", ToggleBtn)
+btnCorner.CornerRadius = UDim.new(0, 6)
+
+local btnStroke = Instance.new("UIStroke", ToggleBtn)
+btnStroke.Color = Color3.fromRGB(70, 70, 75)
+btnStroke.Thickness = 1
+btnStroke.Transparency = 0.4
+
+-- ボタンの見た目を更新する関数
+local function updateButtonDisplay()
+    if _G.LockRotation then
+        ToggleBtn.BackgroundColor3 = Color3.fromRGB(245, 245, 245)
+        ToggleBtn.TextColor3 = Color3.fromRGB(15, 15, 15)
+        ToggleBtn.Text = "ROTATION : LOCK"
+        btnStroke.Color = Color3.fromRGB(255, 255, 255)
+    else
+        ToggleBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 22)
+        ToggleBtn.TextColor3 = Color3.fromRGB(130, 130, 135)
+        ToggleBtn.Text = "ROTATION : OFF"
+        btnStroke.Color = Color3.fromRGB(70, 70, 75)
+    end
+end
+
+-- クリックイベント
+ToggleBtn.MouseButton1Click:Connect(function()
+    _G.LockRotation = not _G.LockRotation
+    updateButtonDisplay()
+end)
+
+-- 毎フレームキャラクターの向きをカメラに強制同期
+runService.RenderStepped:Connect(function()
+    if _G.LockRotation then
+        pcall(function()
+            local char = plr.Character
+            if char then
+                local hrp = char:FindFirstChild("HumanoidRootPart")
+                local hum = char:FindFirstChild("Humanoid")
+                
+                -- キャラクターが生きていて、HumanoidRootPartが存在する場合
+                if hrp and hum and hum.Health > 0 then
+                    -- カメラの水平方向（Y軸の回転のみ）を取得
+                    local camLook = camera.CFrame.LookVector
+                    local targetAngle = math.atan2(-camLook.X, -camLook.Z)
+                    
+                    -- キャラクターのCFrameをカメラの向きに合わせて強制上書き
+                    hrp.CFrame = CFrame.new(hrp.Position) * CFrame.Angles(0, targetAngle, 0)
+                end
+            end
+        end)
+    end
+end)
