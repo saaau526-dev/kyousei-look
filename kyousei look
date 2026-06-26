@@ -1,71 +1,273 @@
 local players = game:GetService("Players")
 local runService = game:GetService("RunService")
+local userInputService = game:GetService("UserInputService")
+local tweenService = game:GetService("TweenService")
+local httpService = game:GetService("HttpService")
+
 local plr = players.LocalPlayer
 local camera = workspace.CurrentCamera
 
--- モード管理 ("OFF", "CAMERA", "TARGET")
+-- モード管理 ("OFF", "CAMERA", "TARGET", "SELECT")
 local currentMode = "OFF"
+local selectedPlayer = nil -- SELECTモード時に狙うプレイヤー
 
+-- ==========================================
+-- 💾 セーブ・ロード機能 (PC内ファイル保存)
+-- ==========================================
+local SETTINGS_FILE = "aim_controller_settings.json"
+local CYCLE_KEY = Enum.KeyCode.P -- デフォルト値
+
+-- 設定を保存する関数
+local function saveSettings()
+    if writefile then
+        local data = {
+            Keybind = CYCLE_KEY.Name
+        }
+        local success, json = pcall(function() return httpService:JSONEncode(data) end)
+        if success then
+            writefile(SETTINGS_FILE, json)
+        end
+    end
+end
+
+-- 設定を読み込む関数
+local function loadSettings()
+    if readfile and isfile and isfile(SETTINGS_FILE) then
+        local success, content = pcall(function() return readfile(SETTINGS_FILE) end)
+        if success and content then
+            local dataSuccess, data = pcall(function() return httpService:JSONDecode(content) end)
+            if dataSuccess and data and data.Keybind then
+                local keySuccess, keyCode = pcall(function() return Enum.KeyCode[data.Keybind] end)
+                if keySuccess and keyCode then
+                    CYCLE_KEY = keyCode
+                end
+            end
+        end
+    end
+end
+
+-- 最初に設定をロード
+loadSettings()
+
+local isBinding = false -- 現在キーバインド変更待機中かどうか
+
+-- ==========================================
+-- 🛠️ GUI作成 & ドラッグ機能実装
+-- ==========================================
 local ScreenGui = Instance.new("ScreenGui", game.CoreGui)
-ScreenGui.Name = "Rotation_Lock_Advanced_Gui"
+ScreenGui.Name = "Rotation_Lock_Pro_Gui"
 ScreenGui.ResetOnSpawn = false
 
--- トグルボタンの作成
-local ToggleBtn = Instance.new("TextButton", ScreenGui)
-ToggleBtn.Size = UDim2.new(0, 160, 0, 35)
-ToggleBtn.Position = UDim2.new(1, -180, 0, 65) -- ESPメニューと被らないよう少し下に配置
-ToggleBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 22)
+-- ドラッグ機能を付与する関数
+local function makeDraggable(frame, dragHandle)
+    local dragging, dragInput, dragStart, startPos
+    dragHandle.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = frame.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then dragging = false end
+            end)
+        end
+    end)
+    dragHandle.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            dragInput = input
+        end
+    end)
+    userInputService.InputChanged:Connect(function(input)
+        if input == dragInput and dragging then
+            local delta = input.Position - dragStart
+            frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+end
+
+-- メインフレーム (コントロールパネル)
+local MainFrame = Instance.new("Frame", ScreenGui)
+MainFrame.Size = UDim2.new(0, 180, 0, 125)
+MainFrame.Position = UDim2.new(1, -200, 0, 65)
+MainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 22)
+MainFrame.BorderSizePixel = 0
+Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 6)
+local MainStroke = Instance.new("UIStroke", MainFrame)
+MainStroke.Color = Color3.fromRGB(70, 70, 75)
+MainStroke.Thickness = 1
+
+-- タイトルバー (ドラッグ用ハンドル)
+local TitleBar = Instance.new("TextLabel", MainFrame)
+TitleBar.Size = UDim2.new(1, 0, 0, 25)
+TitleBar.BackgroundTransparency = 1
+TitleBar.Text = "  AIM CONTROLLER"
+TitleBar.TextColor3 = Color3.fromRGB(180, 180, 185)
+TitleBar.Font = Enum.Font.RobotoMono
+TitleBar.TextSize = 10
+TitleBar.TextXAlignment = Enum.TextXAlignment.Left
+makeDraggable(MainFrame, TitleBar)
+
+-- モード切替ボタン
+local ToggleBtn = Instance.new("TextButton", MainFrame)
+ToggleBtn.Size = UDim2.new(1, -20, 0, 30)
+ToggleBtn.Position = UDim2.new(0, 10, 0, 30)
+ToggleBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
 ToggleBtn.TextColor3 = Color3.fromRGB(130, 130, 135)
 ToggleBtn.Text = "AIM MODE : OFF"
 ToggleBtn.Font = Enum.Font.RobotoMono
 ToggleBtn.TextSize = 11
 ToggleBtn.BorderSizePixel = 0
+Instance.new("UICorner", ToggleBtn).CornerRadius = UDim.new(0, 4)
 
-local btnCorner = Instance.new("UICorner", ToggleBtn)
-btnCorner.CornerRadius = UDim.new(0, 6)
+-- キーバインド設定用ボタン (ロードされたキーを初期表示)
+local KeybindBtn = Instance.new("TextButton", MainFrame)
+KeybindBtn.Size = UDim2.new(1, -20, 0, 22)
+KeybindBtn.Position = UDim2.new(0, 10, 0, 65)
+KeybindBtn.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+KeybindBtn.TextColor3 = Color3.fromRGB(160, 160, 165)
+KeybindBtn.Text = "CYCLE KEY : [ " .. CYCLE_KEY.Name .. " ]" 
+KeybindBtn.Font = Enum.Font.RobotoMono
+KeybindBtn.TextSize = 10
+KeybindBtn.BorderSizePixel = 0
+Instance.new("UICorner", KeybindBtn).CornerRadius = UDim.new(0, 4)
+local KeybindStroke = Instance.new("UIStroke", KeybindBtn)
+KeybindStroke.Color = Color3.fromRGB(50, 50, 55)
+KeybindStroke.Thickness = 1
 
-local btnStroke = Instance.new("UIStroke", ToggleBtn)
-btnStroke.Color = Color3.fromRGB(70, 70, 75)
-btnStroke.Thickness = 1
-btnStroke.Transparency = 0.4
+-- リスト展開ボタン
+local ListBtn = Instance.new("TextButton", MainFrame)
+ListBtn.Size = UDim2.new(1, -20, 0, 22)
+ListBtn.Position = UDim2.new(0, 10, 0, 93)
+ListBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+ListBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
+ListBtn.Text = "OPEN PLAYER LIST"
+ListBtn.Font = Enum.Font.RobotoMono
+ListBtn.TextSize = 10
+ListBtn.BorderSizePixel = 0
+Instance.new("UICorner", ListBtn).CornerRadius = UDim.new(0, 4)
 
--- 見た目の更新
+-- ==========================================
+-- 👥 プレイヤーリストGUIの作成
+-- ==========================================
+local ListFrame = Instance.new("Frame", ScreenGui)
+ListFrame.Size = UDim2.new(0, 240, 0, 300)
+ListFrame.Position = UDim2.new(1, -450, 0, 65)
+ListFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 22)
+ListFrame.BorderSizePixel = 0
+ListFrame.Visible = false
+Instance.new("UICorner", ListFrame).CornerRadius = UDim.new(0, 6)
+local ListStroke = Instance.new("UIStroke", ListFrame)
+ListStroke.Color = Color3.fromRGB(70, 70, 75)
+ListStroke.Thickness = 1
+
+local ListTitle = Instance.new("TextLabel", ListFrame)
+ListTitle.Size = UDim2.new(1, 0, 0, 30)
+ListTitle.BackgroundTransparency = 1
+ListTitle.Text = "  SELECT TARGET"
+ListTitle.TextColor3 = Color3.fromRGB(180, 180, 185)
+ListTitle.Font = Enum.Font.RobotoMono
+ListTitle.TextSize = 11
+ListTitle.TextXAlignment = Enum.TextXAlignment.Left
+makeDraggable(ListFrame, ListTitle)
+
+-- スクロールエリア
+local ScrollingFrame = Instance.new("ScrollingFrame", ListFrame)
+ScrollingFrame.Size = UDim2.new(1, -10, 1, -40)
+ScrollingFrame.Position = UDim2.new(0, 5, 0, 35)
+ScrollingFrame.BackgroundTransparency = 1
+ScrollingFrame.BorderSizePixel = 0
+ScrollingFrame.ScrollBarThickness = 4
+ScrollingFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+
+local UIListLayout = Instance.new("UIListLayout", ScrollingFrame)
+UIListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+UIListLayout.Padding = UDim.new(0, 4)
+
+-- ==========================================
+-- ⚙️ ロジック & アップデート処理
+-- ==========================================
+
 local function updateButtonDisplay()
     if currentMode == "OFF" then
-        ToggleBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 22)
+        ToggleBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
         ToggleBtn.TextColor3 = Color3.fromRGB(130, 130, 135)
         ToggleBtn.Text = "AIM MODE : OFF"
-        btnStroke.Color = Color3.fromRGB(70, 70, 75)
     elseif currentMode == "CAMERA" then
         ToggleBtn.BackgroundColor3 = Color3.fromRGB(245, 245, 245)
         ToggleBtn.TextColor3 = Color3.fromRGB(15, 15, 15)
         ToggleBtn.Text = "AIM : CAMERA"
-        btnStroke.Color = Color3.fromRGB(255, 255, 255)
     elseif currentMode == "TARGET" then
         ToggleBtn.BackgroundColor3 = Color3.fromRGB(255, 100, 100)
         ToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-        ToggleBtn.Text = "AIM : TARGET (NEAREST)"
-        btnStroke.Color = Color3.fromRGB(255, 150, 150)
+        ToggleBtn.Text = "AIM : NEAREST"
+    elseif currentMode == "SELECT" then
+        ToggleBtn.BackgroundColor3 = Color3.fromRGB(100, 180, 255)
+        ToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        local name = selectedPlayer and selectedPlayer.DisplayName or "NONE"
+        ToggleBtn.Text = "AIM : " .. string.upper(name)
     end
 end
 
--- 3モード切り替えイベント
-ToggleBtn.MouseButton1Click:Connect(function()
-    if currentMode == "OFF" then
+local function cycleMode()
+    if isBinding then return end
+    
+    if currentMode == "OFF" then 
         currentMode = "CAMERA"
-    elseif currentMode == "CAMERA" then
+    elseif currentMode == "CAMERA" then 
         currentMode = "TARGET"
-    else
+    elseif currentMode == "TARGET" then
+        if selectedPlayer and selectedPlayer.Parent == players and selectedPlayer.Character and selectedPlayer.Character:FindFirstChild("HumanoidRootPart") then
+            currentMode = "SELECT"
+        else
+            currentMode = "OFF"
+            selectedPlayer = nil
+        end
+    elseif currentMode == "SELECT" then 
         currentMode = "OFF"
+    else 
+        currentMode = "OFF" 
     end
     updateButtonDisplay()
+end
+
+ListBtn.MouseButton1Click:Connect(function()
+    ListFrame.Visible = not ListFrame.Visible
+    ListBtn.Text = ListFrame.Visible and "CLOSE PLAYER LIST" or "OPEN PLAYER LIST"
 end)
 
--- 一番近くのプレイヤーを取得する関数
+ToggleBtn.MouseButton1Click:Connect(cycleMode)
+
+KeybindBtn.MouseButton1Click:Connect(function()
+    if isBinding then return end
+    isBinding = true
+    KeybindBtn.Text = "PRESS ANY KEY..."
+    KeybindBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 50)
+    KeybindStroke.Color = Color3.fromRGB(100, 180, 255)
+end)
+
+userInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed and not isBinding then return end
+    
+    if isBinding then
+        if input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode ~= Enum.KeyCode.Unknown then
+            CYCLE_KEY = input.KeyCode
+            isBinding = false
+            KeybindBtn.Text = "CYCLE KEY : [ " .. input.KeyCode.Name .. " ]"
+            KeybindBtn.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+            KeybindStroke.Color = Color3.fromRGB(50, 50, 55)
+            
+            -- ★キー変更時に自動セーブを実行
+            saveSettings()
+        end
+    else
+        if input.KeyCode == CYCLE_KEY then
+            cycleMode()
+        end
+    end
+end)
+
 local function getClosestPlayer()
     local closestPlayer = nil
-    local shortestDistance = math.huge -- 無限大で初期化
-    
+    local shortestDistance = math.huge
     local myChar = plr.Character
     if not myChar or not myChar:FindFirstChild("HumanoidRootPart") then return nil end
     local myHrp = myChar.HumanoidRootPart
@@ -73,7 +275,6 @@ local function getClosestPlayer()
     for _, v in pairs(players:GetPlayers()) do
         if v ~= plr and v.Character and v.Character:FindFirstChild("HumanoidRootPart") and v.Character:FindFirstChild("Humanoid") then
             if v.Character.Humanoid.Health > 0 then
-                -- 自分と相手の距離を計算
                 local distance = (myHrp.Position - v.Character.HumanoidRootPart.Position).Magnitude
                 if distance < shortestDistance then
                     shortestDistance = distance
@@ -85,7 +286,88 @@ local function getClosestPlayer()
     return closestPlayer
 end
 
--- メインループ（毎フレーム実行）
+local function updatePlayerList()
+    for _, child in pairs(ScrollingFrame:GetChildren()) do
+        if child:IsA("Frame") then child:Destroy() end
+    end
+
+    for _, p in pairs(players:GetPlayers()) do
+        if p ~= plr then
+            local ItemFrame = Instance.new("Frame", ScrollingFrame)
+            ItemFrame.Size = UDim2.new(1, -6, 0, 45)
+            ItemFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+            ItemFrame.BorderSizePixel = 0
+            Instance.new("UICorner", ItemFrame).CornerRadius = UDim.new(0, 4)
+
+            local AvatarImg = Instance.new("ImageLabel", ItemFrame)
+            AvatarImg.Size = UDim2.new(0, 35, 0, 35)
+            AvatarImg.Position = UDim2.new(0, 5, 0, 5)
+            AvatarImg.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+            AvatarImg.BorderSizePixel = 0
+            Instance.new("UICorner", AvatarImg).CornerRadius = UDim.new(0, 4)
+            
+            local thumbType = Enum.ThumbnailType.HeadShot
+            local thumbSize = Enum.ThumbnailSize.Size48x48
+            pcall(function()
+                local content, isReady = players:GetUserThumbnailAsync(p.UserId, thumbType, thumbSize)
+                AvatarImg.Image = content
+            end)
+
+            local DispLabel = Instance.new("TextLabel", ItemFrame)
+            DispLabel.Size = UDim2.new(1, -95, 0, 20)
+            DispLabel.Position = UDim2.new(0, 45, 0, 4)
+            DispLabel.BackgroundTransparency = 1
+            DispLabel.Text = p.DisplayName
+            DispLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+            DispLabel.Font = Enum.Font.SourceSansBold
+            DispLabel.TextSize = 14
+            DispLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+            local UserLabel = Instance.new("TextLabel", ItemFrame)
+            UserLabel.Size = UDim2.new(1, -95, 0, 15)
+            UserLabel.Position = UDim2.new(0, 45, 0, 22)
+            UserLabel.BackgroundTransparency = 1
+            UserLabel.Text = "@" .. p.Name
+            UserLabel.TextColor3 = Color3.fromRGB(140, 140, 145)
+            UserLabel.Font = Enum.Font.SourceSans
+            UserLabel.TextSize = 11
+            UserLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+            local SelectBtn = Instance.new("TextButton", ItemFrame)
+            SelectBtn.Size = UDim2.new(0, 45, 0, 25)
+            SelectBtn.Position = UDim2.new(1, -50, 0, 10)
+            SelectBtn.BackgroundColor3 = (selectedPlayer == p) and Color3.fromRGB(100, 180, 255) or Color3.fromRGB(50, 50, 55)
+            SelectBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+            SelectBtn.Text = (selectedPlayer == p) and "LOCK" or "SELECT"
+            SelectBtn.Font = Enum.Font.SourceSansBold
+            SelectBtn.TextSize = 11
+            Instance.new("UICorner", SelectBtn).CornerRadius = UDim.new(0, 4)
+
+            SelectBtn.MouseButton1Click:Connect(function()
+                selectedPlayer = p
+                currentMode = "SELECT" 
+                updateButtonDisplay()
+                updatePlayerList() 
+            end)
+        end
+    end
+    ScrollingFrame.CanvasSize = UDim2.new(0, 0, 0, UIListLayout.AbsoluteContentSize.Y + 10)
+end
+
+players.PlayerAdded:Connect(updatePlayerList)
+players.PlayerRemoving:Connect(function(p)
+    if selectedPlayer == p then
+        selectedPlayer = nil
+        if currentMode == "SELECT" then currentMode = "OFF" end
+        updateButtonDisplay()
+    end
+    updatePlayerList()
+end)
+updatePlayerList()
+
+-- ==========================================
+-- 🔄 メインループ (回転ロック処理)
+-- ==========================================
 runService.RenderStepped:Connect(function()
     if currentMode == "OFF" then return end
     
@@ -96,27 +378,34 @@ runService.RenderStepped:Connect(function()
         local hum = char:FindFirstChild("Humanoid")
         
         if hrp and hum and hum.Health > 0 then
-            
-            -- 【CAMERAモード】視点（カメラ）の方向に強制的に向く
             if currentMode == "CAMERA" then
                 local camLook = camera.CFrame.LookVector
                 local targetAngle = math.atan2(-camLook.X, -camLook.Z)
                 hrp.CFrame = CFrame.new(hrp.Position) * CFrame.Angles(0, targetAngle, 0)
             
-            -- 【TARGETモード】一番近くのプレイヤーの方向に強制的に向く
             elseif currentMode == "TARGET" then
                 local targetPlr = getClosestPlayer()
                 if targetPlr and targetPlr.Character and targetPlr.Character:FindFirstChild("HumanoidRootPart") then
                     local targetHrp = targetPlr.Character.HumanoidRootPart
-                    
-                    -- 高低差（Y軸）を無視して水平方向だけの向きを計算
                     local lookPos = Vector3.new(targetHrp.Position.X, hrp.Position.Y, targetHrp.Position.Z)
-                    
-                    -- キャラクターの向きをターゲットへ固定
                     hrp.CFrame = CFrame.lookAt(hrp.Position, lookPos)
                 end
+                
+            elseif currentMode == "SELECT" then
+                if selectedPlayer and selectedPlayer.Character and selectedPlayer.Character:FindFirstChild("HumanoidRootPart") then
+                    local targetHrp = selectedPlayer.Character.HumanoidRootPart
+                    if selectedPlayer.Character:FindFirstChild("Humanoid") and selectedPlayer.Character.Humanoid.Health > 0 then
+                        local lookPos = Vector3.new(targetHrp.Position.X, hrp.Position.Y, targetHrp.Position.Z)
+                        hrp.CFrame = CFrame.lookAt(hrp.Position, lookPos)
+                    else
+                        currentMode = "OFF"
+                        updateButtonDisplay()
+                    end
+                else
+                    currentMode = "OFF"
+                    updateButtonDisplay()
+                end
             end
-            
         end
     end)
 end)
